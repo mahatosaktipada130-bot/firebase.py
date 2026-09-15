@@ -8,7 +8,7 @@ from flask import Flask
 app = Flask(__name__)
 
 # Telegram Bot Token
-BOT_TOKEN = "YOUR_TELEGRAM_BOT_TOKEN_HERE"
+BOT_TOKEN = "8876082662:AAG5mw5h8Pim7V236Xnk0MJt-lEv_RWOuAU"
 bot = telebot.TeleBot(BOT_TOKEN)
 
 def check_firebase_status(url):
