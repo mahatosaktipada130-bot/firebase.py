@@ -12,10 +12,10 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Ultra-Fast 100 Bulk Firebase Checker is Running!"
+    return "Optimized Low-RAM Firebase Checker is Active!"
 
-def single_check(url):
-    """Fast URL checking with strict 3s timeout"""
+def check_single(url):
+    """Memory-efficient checking logic"""
     if "firebaseio.com" not in url and "firebasedatabase.app" not in url:
         return None
     
@@ -23,80 +23,74 @@ def single_check(url):
         url = "https://" + url
 
     clean_url = url.rstrip('/') + '/.json'
+    
+    # Session ka use karke connections reusable aur memory safe banaye hain
+    session = requests.Session()
     try:
-        r = requests.get(clean_url, timeout=3)
+        r = session.get(clean_url, timeout=3)
         if r.status_code == 404 or "disabled" in r.text.lower() or "does not exist" in r.text.lower():
-            return f"🔴 `{url}`"
+            res = f"🔴 `{url}`"
         else:
-            return f"🟢 `{url}`"
+            res = f"🟢 `{url}`"
     except Exception:
-        return f"⚠️ `{url}`"
+        res = f"⚠️ `{url}`"
+    finally:
+        session.close()
+        
+    return res
 
-def send_long_message(chat_id, text):
-    """100 Links ke bade results ko safely split karke bhejne ke liye"""
-    max_length = 3500
-    if len(text) <= max_length:
-        bot.send_message(chat_id, text, parse_mode="Markdown")
-    else:
-        lines = text.split("\n")
-        current_chunk = ""
-        for line in lines:
-            if len(current_chunk) + len(line) + 1 > max_length:
-                bot.send_message(chat_id, current_chunk, parse_mode="Markdown")
-                current_chunk = line + "\n"
-            else:
-                current_chunk += line + "\n"
-        if current_chunk:
-            bot.send_message(chat_id, current_chunk, parse_mode="Markdown")
+def send_in_chunks(chat_id, text):
+    """Telegram message length limit handle karne ke liye"""
+    max_len = 3500
+    for i in range(0, len(text), max_len):
+        bot.send_message(chat_id, text[i:i+max_len], parse_mode="Markdown")
 
 if bot:
     @bot.message_handler(commands=['start', 'help'])
     def send_welcome(message):
-        bot.reply_to(message, "⚡ **100 Bulk Firebase Checker Ready!**\n\nEk saath 100 links tak paste karke bhej do, super-fast check ho jayega.")
+        bot.reply_to(message, "⚡ **Stable Bulk Firebase Checker Ready!**\n\nAap 100 links tak paste karke bhej sakte hain.")
 
     @bot.message_handler(func=lambda message: True)
     def check_firebase(message):
-        text = message.text.strip()
-        urls = [line.strip() for line in text.split('\n') if line.strip()]
+        urls = [line.strip() for line in message.text.split('\n') if line.strip()]
         
         if not urls:
             return
 
-        msg = bot.reply_to(message, f"🚀 Checking {len(urls)} Firebase URLs in parallel... Please wait.")
+        msg = bot.reply_to(message, f"🚀 Checking {len(urls)} Firebase URLs... Please wait.")
 
-        # Ek saath 50 threads parallel chalenge (Ultra Speed)
-        with ThreadPoolExecutor(max_workers=50) as executor:
-            results = list(executor.map(single_check, urls))
+        # Max 10 threads taaki Render 512MB RAM crash na ho
+        with ThreadPoolExecutor(max_workers=10) as executor:
+            results = list(executor.map(check_single, urls))
 
         valid_results = [res for res in results if res is not None]
 
         if not valid_results:
-            bot.edit_message_text("❌ Koi valid Firebase URL nahi mila.", message.chat.id, msg.message_id)
+            bot.edit_message_text("❌ No valid Firebase URLs found.", message.chat.id, msg.message_id)
             return
 
-        # Counts
         active_count = sum(1 for r in valid_results if "🟢" in r)
         dead_count = sum(1 for r in valid_results if "🔴" in r)
         error_count = sum(1 for r in valid_results if "⚠️" in r)
 
-        summary_header = (
+        header = (
             f"📊 **Check Complete! (Total: {len(valid_results)})**\n\n"
             f"🟢 Active: {active_count} | 🔴 Dead: {dead_count} | ⚠️ Error: {error_count}\n"
-            + "─"*32 + "\n\n"
+            + "─"*30 + "\n\n"
         )
-        full_response = summary_header + "\n".join(valid_results)
+        full_response = header + "\n".join(valid_results)
 
         try:
             bot.delete_message(message.chat.id, msg.message_id)
         except Exception:
             pass
 
-        send_long_message(message.chat.id, full_response)
+        send_in_chunks(message.chat.id, full_response)
 
 def start_bot():
     if bot:
         print("Bot is polling...")
-        bot.infinity_polling()
+        bot.infinity_polling(timeout=10, long_polling_timeout=5)
 
 threading.Thread(target=start_bot, daemon=True).start()
 
