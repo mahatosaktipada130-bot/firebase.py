@@ -1,105 +1,109 @@
 import os
-import asyncio
-import aiohttp
 import threading
+import requests
 from flask import Flask
-import telebot
 
-TOKEN = os.environ.get("BOT_TOKEN")
-bot = telebot.TeleBot(TOKEN) if TOKEN else None
-
+# Flask App Initialization (Render Port Binding Ke Liye)
 app = Flask(__name__)
 
-@app.route('/')
-def home():
-    return "Async Ultra-Fast Firebase Checker is Online!"
+# Terminal Colors
+GREEN = "\033[92m"
+RED = "\033[91m"
+YELLOW = "\033[93m"
+RESET = "\033[0m"
 
-async def check_url(session, url):
-    """Fast Async URL check with strict 2s timeout"""
-    if "firebaseio.com" not in url and "firebasedatabase.app" not in url:
+def check_firebase_status(url):
+    """
+    Firebase Realtime Database ka accurate status check karta hai.
+    HTTP Status Code ke sath Response Body ko inspect karta hai.
+    """
+    url = url.strip()
+    if not url:
         return None
-    
-    if not url.startswith("http"):
-        url = "https://" + url
 
-    clean_url = url.rstrip('/') + '/.json'
-    
+    clean_url = url.split("?")[0].rstrip("/")
+    target_url = f"{clean_url}/.json"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"
+    }
+
     try:
-        async with session.get(clean_url, timeout=2) as response:
-            text = await response.text()
-            if response.status == 404 or "disabled" in text.lower() or "does not exist" in text.lower():
-                return f"🔴 `{url}`"
+        response = requests.get(target_url, headers=headers, timeout=7)
+        body = response.text.lower()
+        status = response.status_code
+
+        # 1. Deactivated ya Disabled Check
+        if "database disabled" in body or "project disabled" in body:
+            return {"url": clean_url, "status": "DEAD", "reason": "Database Disabled", "color": RED}
+
+        # 2. Permission Denied (Active DB par rules locked hain)
+        elif "permission denied" in body:
+            return {"url": clean_url, "status": "ACTIVE_LOCKED", "reason": "Permission Denied (Locked)", "color": YELLOW}
+
+        # 3. Open / Accessible Database (Data read ho raha hai ya Empty hai)
+        elif status == 200:
+            return {"url": clean_url, "status": "ACTIVE_OPEN", "reason": "Open Read Access", "color": GREEN}
+
+        # 4. Other Error Codes
+        else:
+            return {"url": clean_url, "status": "DEAD", "reason": f"HTTP {status}", "color": RED}
+
+    except requests.exceptions.Timeout:
+        return {"url": clean_url, "status": "ERROR", "reason": "Connection Timeout", "color": RED}
+    except requests.exceptions.RequestException:
+        return {"url": clean_url, "status": "ERROR", "reason": "Network Error", "color": RED}
+
+def run_checker_task():
+    """Background Thread Me Sahi Se Execute Hone Waala Main Logic"""
+    print("=== Firebase Realtime Database Accurate Checker Started ===\n")
+    
+    file_path = "urls.txt"
+    
+    if not os.path.exists(file_path):
+        print(f"{RED}Error: '{file_path}' file nahi mili! Folder me 'urls.txt' add karein.{RESET}")
+        return
+
+    with open(file_path, "r") as file:
+        urls = [line.strip() for line in file if line.strip()]
+
+    print(f"Total URLs to check: {len(urls)}\n" + "-"*40)
+
+    active_urls = []
+    dead_urls = []
+
+    for index, url in enumerate(urls, 1):
+        result = check_firebase_status(url)
+        if result:
+            color = result["color"]
+            print(f"[{index}/{len(urls)}] {color}[{result['status']}] {result['url']} -> {result['reason']}{RESET}")
+            
+            if "ACTIVE" in result["status"]:
+                active_urls.append(result["url"])
             else:
-                return f"🟢 `{url}`"
-    except Exception:
-        return f"⚠️ `{url}`"
+                dead_urls.append(result["url"])
 
-async def process_bulk_urls(urls):
-    """Parallel execution using asyncio"""
-    async with aiohttp.ClientSession() as session:
-        tasks = [check_url(session, url) for url in urls]
-        return await asyncio.gather(*tasks)
+    # Output Files Me Save Karein
+    with open("active_result.txt", "w") as f:
+        f.write("\n".join(active_urls))
 
-def send_in_chunks(chat_id, text):
-    """Telegram 4000 char limit handler"""
-    max_len = 3500
-    for i in range(0, len(text), max_len):
-        bot.send_message(chat_id, text[i:i+max_len], parse_mode="Markdown")
+    print("-" * 40)
+    print(f"{GREEN}Checking Completed!{RESET}")
+    print(f"🟢 Total Active: {len(active_urls)}")
+    print(f"🔴 Total Dead/Disabled: {len(dead_urls)}")
+    print(f"\nSaved Active URLs in: active_result.txt")
 
-if bot:
-    @bot.message_handler(commands=['start', 'help'])
-    def send_welcome(message):
-        bot.reply_to(message, "⚡ **Super Fast Async Firebase Checker Ready!**\n\nKitne bhi links bhej do, 3 second me result milega.")
+@app.route('/')
+def health_check():
+    # Render Dashboard Ke Liye Health Check Route
+    return "Firebase Checker Service is Running!"
 
-    @bot.message_handler(func=lambda message: True)
-    def check_firebase(message):
-        urls = [line.strip() for line in message.text.split('\n') if line.strip()]
-        
-        if not urls:
-            return
+if __name__ == "__main__":
+    # Main Task Ko Background Thread Me Start Karein
+    thread = threading.Thread(target=run_checker_task)
+    thread.daemon = True
+    thread.start()
 
-        msg = bot.reply_to(message, f"🚀 Checking {len(urls)} Firebase URLs... Please wait.")
-
-        # Run Async loop for fast processing
-        try:
-            results = asyncio.run(process_bulk_urls(urls))
-        except Exception:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            results = loop.run_until_complete(process_bulk_urls(urls))
-
-        valid_results = [res for res in results if res is not None]
-
-        if not valid_results:
-            bot.edit_message_text("❌ No valid Firebase URLs found.", message.chat.id, msg.message_id)
-            return
-
-        active_count = sum(1 for r in valid_results if "🟢" in r)
-        dead_count = sum(1 for r in valid_results if "🔴" in r)
-        error_count = sum(1 for r in valid_results if "⚠️" in r)
-
-        header = (
-            f"📊 **Check Complete! (Total: {len(valid_results)})**\n\n"
-            f"🟢 Active: {active_count} | 🔴 Dead: {dead_count} | ⚠️ Error: {error_count}\n"
-            + "─"*30 + "\n\n"
-        )
-        full_response = header + "\n".join(valid_results)
-
-        try:
-            bot.delete_message(message.chat.id, msg.message_id)
-        except Exception:
-            pass
-
-        send_in_chunks(message.chat.id, full_response)
-
-def run_bot():
-    if bot:
-        bot.remove_webhook()
-        print("Bot started with Async engine...")
-        bot.infinity_polling(skip_pending=True)
-
-threading.Thread(target=run_bot, daemon=True).start()
-
-if __name__ == '__main__':
+    # Render ka Dynamic Port Listen Karein
     port = int(os.environ.get("PORT", 5000))
-    app.run(host='0.0.0.0', port=port)
+    app.run(host="0.0.0.0", port=port)
