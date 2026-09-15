@@ -4,11 +4,11 @@ import requests
 import telebot
 from flask import Flask
 
-# Flask Server (Render Port Binding ke liye)
 app = Flask(__name__)
 
-# Telegram Bot Token
-BOT_TOKEN = "8876082662:AAG5mw5h8Pim7V236Xnk0MJt-lEv_RWOuAU"
+# Aapka Telegram Bot Token (Environment Variable se lega ya direct string)
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "7123456789:AAFg...aapka_real_token_yahan")
+
 bot = telebot.TeleBot(BOT_TOKEN)
 
 def check_firebase_status(url):
@@ -41,7 +41,7 @@ def check_firebase_status(url):
 
 @bot.message_handler(commands=['start', 'help'])
 def send_welcome(message):
-    bot.reply_to(message, "👋 **Firebase Database Checker Bot**\n\n1. Mujhe Firebase URLs ka message bhejo.\n2. Ya fir `.txt` file upload karo.")
+    bot.reply_to(message, "👋 **Firebase Database Checker Bot**\n\n1. Mujhe Firebase URLs ka text message bhejo.\n2. Ya fir `.txt` file upload karo.")
 
 @bot.message_handler(content_types=['document'])
 def handle_docs(message):
@@ -101,20 +101,22 @@ def process_and_respond(message, urls, status_msg):
     if os.path.exists(result_filename):
         os.remove(result_filename)
 
-def run_bot():
-    print("Telegram Bot Polling Started...", flush=True)
-    bot.infinity_polling(timeout=10, long_polling_timeout=5)
+def start_polling():
+    print(">>> Telegram Bot Polling Thread Started <<<", flush=True)
+    try:
+        bot.infinity_polling(timeout=20, long_polling_timeout=10)
+    except Exception as e:
+        print(f"Polling error: {e}", flush=True)
+
+# Gunicorn / Import par background thread turant launch karne ke liye
+t = threading.Thread(target=start_polling, daemon=True)
+t.start()
 
 @app.route('/')
 def health_check():
-    return "Telegram Bot Web Service is Running!"
+    return "Firebase Telegram Bot is Alive & Running!"
 
 if __name__ == "__main__":
-    # Telegram Bot ko separate thread me start karo
-    bot_thread = threading.Thread(target=run_bot, daemon=True)
-    bot_thread.start()
-
-    # Flask App for Render Port Binding
     port = int(os.environ.get("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
 
