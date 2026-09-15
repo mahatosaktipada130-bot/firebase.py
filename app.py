@@ -1,7 +1,7 @@
 import os
-import requests
+import asyncio
+import aiohttp
 import threading
-from concurrent.futures import ThreadPoolExecutor
 from flask import Flask
 import telebot
 
@@ -12,10 +12,10 @@ app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Optimized Low-RAM Firebase Checker is Active!"
+    return "Async Ultra-Fast Firebase Checker is Online!"
 
-def check_single(url):
-    """Memory-efficient checking logic"""
+async def check_url(session, url):
+    """Fast Async URL check with strict 2s timeout"""
     if "firebaseio.com" not in url and "firebasedatabase.app" not in url:
         return None
     
@@ -24,23 +24,24 @@ def check_single(url):
 
     clean_url = url.rstrip('/') + '/.json'
     
-    # Session ka use karke connections reusable aur memory safe banaye hain
-    session = requests.Session()
     try:
-        r = session.get(clean_url, timeout=3)
-        if r.status_code == 404 or "disabled" in r.text.lower() or "does not exist" in r.text.lower():
-            res = f"🔴 `{url}`"
-        else:
-            res = f"🟢 `{url}`"
+        async with session.get(clean_url, timeout=2) as response:
+            text = await response.text()
+            if response.status == 404 or "disabled" in text.lower() or "does not exist" in text.lower():
+                return f"🔴 `{url}`"
+            else:
+                return f"🟢 `{url}`"
     except Exception:
-        res = f"⚠️ `{url}`"
-    finally:
-        session.close()
-        
-    return res
+        return f"⚠️ `{url}`"
+
+async def process_bulk_urls(urls):
+    """Parallel execution using asyncio"""
+    async with aiohttp.ClientSession() as session:
+        tasks = [check_url(session, url) for url in urls]
+        return await asyncio.gather(*tasks)
 
 def send_in_chunks(chat_id, text):
-    """Telegram message length limit handle karne ke liye"""
+    """Telegram 4000 char limit handler"""
     max_len = 3500
     for i in range(0, len(text), max_len):
         bot.send_message(chat_id, text[i:i+max_len], parse_mode="Markdown")
@@ -48,7 +49,7 @@ def send_in_chunks(chat_id, text):
 if bot:
     @bot.message_handler(commands=['start', 'help'])
     def send_welcome(message):
-        bot.reply_to(message, "⚡ **Stable Bulk Firebase Checker Ready!**\n\nAap 100 links tak paste karke bhej sakte hain.")
+        bot.reply_to(message, "⚡ **Super Fast Async Firebase Checker Ready!**\n\nKitne bhi links bhej do, 3 second me result milega.")
 
     @bot.message_handler(func=lambda message: True)
     def check_firebase(message):
@@ -59,9 +60,13 @@ if bot:
 
         msg = bot.reply_to(message, f"🚀 Checking {len(urls)} Firebase URLs... Please wait.")
 
-        # Max 10 threads taaki Render 512MB RAM crash na ho
-        with ThreadPoolExecutor(max_workers=10) as executor:
-            results = list(executor.map(check_single, urls))
+        # Run Async loop for fast processing
+        try:
+            results = asyncio.run(process_bulk_urls(urls))
+        except Exception:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            results = loop.run_until_complete(process_bulk_urls(urls))
 
         valid_results = [res for res in results if res is not None]
 
@@ -87,12 +92,13 @@ if bot:
 
         send_in_chunks(message.chat.id, full_response)
 
-def start_bot():
+def run_bot():
     if bot:
-        print("Bot is polling...")
-        bot.infinity_polling(timeout=10, long_polling_timeout=5)
+        bot.remove_webhook()
+        print("Bot started with Async engine...")
+        bot.infinity_polling(skip_pending=True)
 
-threading.Thread(target=start_bot, daemon=True).start()
+threading.Thread(target=run_bot, daemon=True).start()
 
 if __name__ == '__main__':
     port = int(os.environ.get("PORT", 5000))
