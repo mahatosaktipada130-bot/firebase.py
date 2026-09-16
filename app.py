@@ -2,7 +2,6 @@ import base64
 from datetime import datetime
 import os
 import re
-import sqlite3
 import threading
 from urllib.parse import parse_qs, urlparse
 from flask import Flask
@@ -12,63 +11,78 @@ from telebot.types import KeyboardButton, ReplyKeyboardMarkup
 
 app = Flask(__name__)
 
-# Environment variable se Token lega ya fallback string se
 BOT_TOKEN = os.environ.get(
     "BOT_TOKEN", "7123456789:AAFg...aapka_real_token_yahan"
 )
 bot = telebot.TeleBot(BOT_TOKEN)
 
-DB_NAME = "firebase_links.db"
+TXT_FILE = "saved_firebase_vault.txt"
 
 
-def init_db():
-  conn = sqlite3.connect(DB_NAME)
-  cursor = conn.cursor()
-  cursor.execute("""
-        CREATE TABLE IF NOT EXISTS active_urls (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            user_id INTEGER,
-            url TEXT UNIQUE,
-            status TEXT,
-            added_time TEXT
-        )
-    """)
-  conn.commit()
-  conn.close()
-
-
-init_db()
-
-
+# --- TXT FILE MANAGEMENT FUNCTIONS ---
 def save_active_url(user_id, url, status):
+  user_id = str(user_id)
+  existing_urls = [u for u, _ in get_user_urls(user_id)]
+
+  if url in existing_urls:
+    return
+
+  now = datetime.now().strftime("%d %b %Y, %I:%M %p")
+  # Format: user_id|status|added_time|url
+  line = f"{user_id}|{status}|{now}|{url}\n"
+
   try:
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    now = datetime.now().strftime("%d %b %Y, %I:%M %p")
-    cursor.execute(
-        """
-            INSERT OR IGNORE INTO active_urls (user_id, url, status, added_time)
-            VALUES (?, ?, ?, ?)
-        """,
-        (user_id, url, status, now),
-    )
-    conn.commit()
-    conn.close()
+    with open(TXT_FILE, "a", encoding="utf-8") as f:
+      f.write(line)
   except Exception as e:
-    print(f"DB Error: {e}", flush=True)
+    print(f"TXT Save Error: {e}", flush=True)
 
 
 def get_user_urls(user_id):
-  conn = sqlite3.connect(DB_NAME)
-  cursor = conn.cursor()
-  cursor.execute(
-      "SELECT url, status FROM active_urls WHERE user_id = ?", (user_id,)
-  )
-  rows = cursor.fetchall()
-  conn.close()
-  return rows
+  user_id = str(user_id)
+  if not os.path.exists(TXT_FILE):
+    return []
+
+  user_data = []
+  try:
+    with open(TXT_FILE, "r", encoding="utf-8") as f:
+      for line in f:
+        parts = line.strip().split("|")
+        if len(parts) >= 4 and parts[0] == user_id:
+          # returns (url, status)
+          user_data.append((parts[3], parts[1]))
+  except Exception as e:
+    print(f"TXT Read Error: {e}", flush=True)
+
+  return user_data
 
 
+def clear_user_history(chat_id, message_obj):
+  user_id = str(chat_id)
+  if not os.path.exists(TXT_FILE):
+    return
+
+  try:
+    with open(TXT_FILE, "r", encoding="utf-8") as f:
+      lines = f.readlines()
+
+    with open(TXT_FILE, "w", encoding="utf-8") as f:
+      for line in lines:
+        parts = line.strip().split("|")
+        if len(parts) >= 1 and parts[0] != user_id:
+          f.write(line)
+
+    bot.send_message(
+        chat_id,
+        "🗑️ **VAULT CLEARED**\n`All stored URLs removed successfully.`",
+        parse_mode="Markdown",
+        reply_markup=main_menu_keyboard(),
+    )
+  except Exception as e:
+    print(f"TXT Clear Error: {e}", flush=True)
+
+
+# --- CORE LOGIC & TELEGRAM HANDLERS ---
 def extract_and_decode_urls(text):
   urls_found = set()
   raw_urls = re.findall(r'https?://[^\s"\']+', text)
@@ -136,7 +150,6 @@ def check_firebase_status(url):
     }
 
 
-# Custom Reply Keyboard Menu UI (Message bar keyboard with distinct styled options)
 def main_menu_keyboard():
   markup = ReplyKeyboardMarkup(resize_keyboard=True, row_width=2)
   btn_vault = KeyboardButton("📜 View Saved Vault")
@@ -171,7 +184,6 @@ def send_welcome(message):
   )
 
 
-# Text Handler for Reply Keyboard Buttons
 @bot.message_handler(
     func=lambda message: message.text
     in [
@@ -212,9 +224,9 @@ def handle_keyboard_buttons(message):
     sys_text = (
         "⚙️ **SYSTEM INFRASTRUCTURE**\n"
         "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-        "🟢 **Server Status:** `ONLINE (Render Web Engine)`\n"
+        "🟢 **Server Status:** `ONLINE (TXT Database Active)`\n"
         "⚡ **Worker Daemon:** `Active Polling`\n"
-        "🗄️ **Storage Engine:** `SQLite3 Persistent Data`\n"
+        "🗄️ **Storage Engine:** `Plain-Text (TXT) Vault`\n"
         "🔒 **Encryption:** `Base64 Auto-Stream Decoder`"
     )
     bot.send_message(
@@ -271,20 +283,6 @@ def render_all_urls(chat_id, message_obj):
     )
 
 
-def clear_user_history(chat_id, message_obj):
-  conn = sqlite3.connect(DB_NAME)
-  cursor = conn.cursor()
-  cursor.execute("DELETE FROM active_urls WHERE user_id = ?", (chat_id,))
-  conn.commit()
-  conn.close()
-  bot.send_message(
-      chat_id,
-      "🗑️ **VAULT CLEARED**\n`All stored URLs removed successfully.`",
-      parse_mode="Markdown",
-      reply_markup=main_menu_keyboard(),
-  )
-
-
 @bot.message_handler(content_types=["document"])
 def handle_docs(message):
   if not message.document.file_name.endswith(".txt"):
@@ -338,13 +336,7 @@ def process_and_respond(message, urls, status_msg):
   dead_count = 0
   new_added = 0
 
-  conn = sqlite3.connect(DB_NAME)
-  cursor = conn.cursor()
-  cursor.execute(
-      "SELECT url FROM active_urls WHERE user_id = ?", (message.chat.id,)
-  )
-  existing_urls = set(row[0] for row in cursor.fetchall())
-  conn.close()
+  existing_urls = set(u for u, _ in get_user_urls(message.chat.id))
 
   for url in urls:
     if not url.strip():
@@ -371,7 +363,7 @@ def process_and_respond(message, urls, status_msg):
       "👑 **EXECUTION EXECUTIVE SUMMARY**\n"
       "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
       f"🟢 **Active Open DBs:** `{active_open}`\n"
-      f"🟡 **Active Locked DBs:** `{locked_cnt if 'locked_cnt' in locals() else active_locked}`\n"
+      f"🟡 **Active Locked DBs:** `{active_locked}`\n"
       f"🔴 **Dead / Offline:** `{dead_count}`\n"
       "━━━━━━━━━━━━━━━━━━━━━━━━━\n"
       f"✨ **New Unique Vault Additions:** `{new_added}`\n"
