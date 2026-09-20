@@ -44,7 +44,6 @@ async def check_single_firebase_fast(session, firebase_url: str) -> dict:
                 if not text_data or text_data == "null":
                     return {"status": "error", "msg": "⚠️ Empty"}
 
-                # Fast JSON parsing
                 try:
                     data = json.loads(text_data)
                 except Exception:
@@ -54,7 +53,7 @@ async def check_single_firebase_fast(session, firebase_url: str) -> dict:
                 offline_count = 0
                 total_devices = 0
 
-                # Non-recursive fast iterative scanner for status fields
+                # Non-recursive fast iterative scanner
                 nodes = [data]
                 while nodes:
                     curr = nodes.pop()
@@ -82,7 +81,8 @@ async def check_single_firebase_fast(session, firebase_url: str) -> dict:
                     "status": "ok",
                     "online": online_count,
                     "offline": offline_count,
-                    "total": total_devices
+                    "total": total_devices,
+                    "original_url": firebase_url
                 }
 
         except asyncio.TimeoutError:
@@ -92,8 +92,8 @@ async def check_single_firebase_fast(session, firebase_url: str) -> dict:
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "⚡ **Ultra-Fast Firebase Scanner**\n\n"
-        "Direct multiple Firebase links bhejien. 100+ links bhi kuch hi seconds me scan ho jayenge!"
+        "⚡ **Ultra-Fast Online Firebase Scanner**\n\n"
+        "Direct multiple Firebase links bhejien. Check karke bot aapko sirf wahi Firebase links dega jinme devices ONLINE hain!"
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -108,7 +108,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Koi valid Firebase URL nahi mila.")
         return
 
-    status_msg = await update.message.reply_text(f"⚡ **{len(unique_urls)} Firebase links HIGH-SPEED scan ho rahe hain...**")
+    status_msg = await update.message.reply_text(f"⚡ **{len(unique_urls)} Firebase links check ho rahe hain...**")
 
     # High-Performance Async Connection Pool
     connector = aiohttp.TCPConnector(limit=100, ttl_dns_cache=300)
@@ -117,6 +117,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         results = await asyncio.gather(*tasks)
 
     report_lines = []
+    online_firebase_links = []
     total_all_online = 0
     total_all_offline = 0
     total_all_devices = 0
@@ -134,16 +135,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             total_all_devices += total
             
             report_lines.append(f"**{idx}. {domain_name}** ➔ 🟢 {online} | 🔴 {offline} | 📱 {total}")
+            
+            # Agar online devices > 0 hain, toh is link ko save kar lo
+            if online > 0:
+                online_firebase_links.append(url)
         else:
             report_lines.append(f"**{idx}. {domain_name}** ➔ {res['msg']}")
 
     # Final Combined Output
     final_report = f"📊 **Multi-Firebase Speed Scan Report**\n\n"
     
-    # Telegram message length limit handle karne ke liye slice
     formatted_body = "\n".join(report_lines)
-    if len(formatted_body) > 3500:
-        formatted_body = formatted_body[:3500] + "\n\n...[Truncated due to size limit]"
+    if len(formatted_body) > 2000:
+        formatted_body = formatted_body[:2000] + "\n\n...[Truncated due to size limit]"
 
     final_report += formatted_body
     final_report += (
@@ -154,7 +158,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"📱 Total Devices: **{total_all_devices}**"
     )
 
-    await status_msg.edit_text(final_report, parse_mode="Markdown")
+    # Adding Active/Online Firebase Links Section
+    if online_firebase_links:
+        final_report += f"\n\n✅ **ACTIVE ONLINE FIREBASE LINKS ({len(online_firebase_links)}):**\n"
+        final_report += "\n".join([f"`{link}`" for link in online_firebase_links])
+    else:
+        final_report += "\n\n⚠️ **Kisi bhi Firebase me Online Device nahi mila.**"
+
+    await status_msg.edit_text(final_report, parse_mode="Markdown", disable_web_page_preview=True)
 
 def main():
     token = os.environ.get("BOT_TOKEN")
@@ -173,4 +184,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
