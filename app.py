@@ -1,5 +1,6 @@
 import os
 import re
+import json
 import asyncio
 import aiohttp
 from flask import Flask
@@ -7,94 +8,98 @@ from threading import Thread
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Flask Web Server
+# Flask Server for Render/Keep-Alive
 app = Flask(__name__)
 
 @app.route('/')
 def home():
-    return "Ultra-Fast Firebase Monitor Bot Active!"
+    return "Ultra High-Speed Multi-Firebase Monitor Active!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
     app.run(host='0.0.0.0', port=port)
 
-# Fast Async Firebase Check
-async def check_single_firebase_async(session, firebase_url: str) -> dict:
+# Concurrency Semaphore: Up to 30 requests concurrently
+SEMAPHORE = asyncio.Semaphore(30)
+
+async def check_single_firebase_fast(session, firebase_url: str) -> dict:
     clean_url = firebase_url.strip()
     if not clean_url.startswith("http"):
         clean_url = "https://" + clean_url
     if not clean_url.endswith(".json"):
         clean_url = clean_url.rstrip("/") + "/.json"
 
-    # Fast Timeout (4 seconds maximum per link)
-    timeout = aiohttp.ClientTimeout(total=4)
+    # Strict 3 seconds timeout per link
+    timeout = aiohttp.ClientTimeout(total=3.0, connect=1.5)
 
-    try:
-        async with session.get(clean_url, timeout=timeout) as response:
-            if response.status in [401, 403]:
-                return {"status": "error", "msg": "🔒 Locked (Permission Denied)"}
-            elif response.status != 200:
-                return {"status": "error", "msg": f"❌ Failed (HTTP {response.status})"}
-            
-            data = await response.json(content_type=None)
-            if data is None:
-                return {"status": "error", "msg": "⚠️ Database Empty (null)"}
+    async with SEMAPHORE:
+        try:
+            async with session.get(clean_url, timeout=timeout) as response:
+                if response.status in [401, 403]:
+                    return {"status": "error", "msg": "🔒 Locked"}
+                elif response.status != 200:
+                    return {"status": "error", "msg": f"❌ HTTP {response.status}"}
+                
+                text_data = await response.text()
+                if not text_data or text_data == "null":
+                    return {"status": "error", "msg": "⚠️ Empty"}
 
-            online_count = 0
-            offline_count = 0
-            total_devices = 0
+                # Fast JSON parsing
+                try:
+                    data = json.loads(text_data)
+                except Exception:
+                    return {"status": "error", "msg": "❌ Invalid Data"}
 
-            # Scan data
-            def scan_data(obj):
-                nonlocal online_count, offline_count, total_devices
-                if isinstance(obj, dict):
-                    has_status = False
-                    for k, v in obj.items():
-                        if k.lower() in ["status", "state", "presence", "isonline", "online"]:
-                            has_status = True
-                            val_str = str(v).lower()
-                            if val_str in ["online", "true", "1", "active"]:
-                                online_count += 1
-                            else:
-                                offline_count += 1
-                            break
-                    
-                    if has_status:
-                        total_devices += 1
-                    
-                    for v in obj.values():
-                        scan_data(v)
-                elif isinstance(obj, list):
-                    for item in obj:
-                        scan_data(item)
+                online_count = 0
+                offline_count = 0
+                total_devices = 0
 
-            scan_data(data)
+                # Non-recursive fast iterative scanner for status fields
+                nodes = [data]
+                while nodes:
+                    curr = nodes.pop()
+                    if isinstance(curr, dict):
+                        has_status = False
+                        for k, v in curr.items():
+                            if k.lower() in ["status", "state", "presence", "isonline", "online"]:
+                                has_status = True
+                                val_str = str(v).lower()
+                                if val_str in ["online", "true", "1", "active"]:
+                                    online_count += 1
+                                else:
+                                    offline_count += 1
+                                break
+                        if has_status:
+                            total_devices += 1
+                        nodes.extend(curr.values())
+                    elif isinstance(curr, list):
+                        nodes.extend(curr)
 
-            if total_devices == 0:
-                return {"status": "error", "msg": "⚠️ Status keys not found"}
+                if total_devices == 0:
+                    return {"status": "error", "msg": "⚠️ No Status Key"}
 
-            return {
-                "status": "ok",
-                "online": online_count,
-                "offline": offline_count,
-                "total": total_devices
-            }
+                return {
+                    "status": "ok",
+                    "online": online_count,
+                    "offline": offline_count,
+                    "total": total_devices
+                }
 
-    except asyncio.TimeoutError:
-        return {"status": "error", "msg": "⏱️ Request Timeout (Slow Database)"}
-    except Exception:
-        return {"status": "error", "msg": "❌ Connection Error"}
+        except asyncio.TimeoutError:
+            return {"status": "error", "msg": "⏱️ Timeout"}
+        except Exception:
+            return {"status": "error", "msg": "❌ Conn Error"}
 
-# Telegram Handlers
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "⚡ **Super Fast Multi-Firebase Monitor**\n\n"
-        "Direct Firebase links bhejien, sabhi ka parallel fast result milega."
+        "⚡ **Ultra-Fast Firebase Scanner**\n\n"
+        "Direct multiple Firebase links bhejien. 100+ links bhi kuch hi seconds me scan ho jayenge!"
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
     
+    # Extract unique Firebase URLs
     firebase_pattern = r'https://[a-zA-Z0-9\.-]+?\.(?:firebaseio\.com|firebasedatabase\.app)'
     found_urls = re.findall(firebase_pattern, text)
     unique_urls = list(dict.fromkeys(found_urls))
@@ -103,11 +108,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Koi valid Firebase URL nahi mila.")
         return
 
-    status_msg = await update.message.reply_text(f"⚡ **{len(unique_urls)} Firebase links PARALLEL check ho rahe hain...**")
+    status_msg = await update.message.reply_text(f"⚡ **{len(unique_urls)} Firebase links HIGH-SPEED scan ho rahe hain...**")
 
-    # Fast Parallel Execution using asyncio.gather
-    async with aiohttp.ClientSession() as session:
-        tasks = [check_single_firebase_async(session, url) for url in unique_urls]
+    # High-Performance Async Connection Pool
+    connector = aiohttp.TCPConnector(limit=100, ttl_dns_cache=300)
+    async with aiohttp.ClientSession(connector=connector) as session:
+        tasks = [check_single_firebase_fast(session, url) for url in unique_urls]
         results = await asyncio.gather(*tasks)
 
     report_lines = []
@@ -127,13 +133,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             total_all_offline += offline
             total_all_devices += total
             
-            report_lines.append(f"**{idx}. {domain_name}**\n🟢 Online: {online} | 🔴 Offline: {offline} | 📱 Total: {total}")
+            report_lines.append(f"**{idx}. {domain_name}** ➔ 🟢 {online} | 🔴 {offline} | 📱 {total}")
         else:
-            report_lines.append(f"**{idx}. {domain_name}**\n{res['msg']}")
+            report_lines.append(f"**{idx}. {domain_name}** ➔ {res['msg']}")
 
-    # Final Combined Report
-    final_report = f"📊 **Firebase Fast Summary Report**\n\n"
-    final_report += "\n\n".join(report_lines)
+    # Final Combined Output
+    final_report = f"📊 **Multi-Firebase Speed Scan Report**\n\n"
+    
+    # Telegram message length limit handle karne ke liye slice
+    formatted_body = "\n".join(report_lines)
+    if len(formatted_body) > 3500:
+        formatted_body = formatted_body[:3500] + "\n\n...[Truncated due to size limit]"
+
+    final_report += formatted_body
     final_report += (
         f"\n\n-------------------------\n"
         f"🌐 **Overall Totals ({len(unique_urls)} Databases):**\n"
@@ -156,7 +168,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     
-    print("Bot is running fast...")
+    print("Ultra-Fast Bot is running...")
     application.run_polling()
 
 if __name__ == '__main__':
