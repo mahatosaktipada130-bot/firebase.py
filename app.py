@@ -1,186 +1,110 @@
 import os
 import re
-import json
 import asyncio
 import aiohttp
 from flask import Flask
 from threading import Thread
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, filters, ContextTypes
 
-# Flask Server for Render/Keep-Alive
-app = Flask(__name__)
+# Render Web Server to keep port alive
+flask_app = Flask(__name__)
 
-@app.route('/')
+@flask_app.route('/')
 def home():
-    return "Ultra High-Speed Multi-Firebase Monitor Active!"
+    return "Bot is running on Render!"
 
 def run_flask():
     port = int(os.environ.get("PORT", 8080))
-    app.run(host='0.0.0.0', port=port)
+    flask_app.run(host="0.0.0.0", port=port)
 
-# Concurrency Semaphore: Up to 30 requests concurrently
-SEMAPHORE = asyncio.Semaphore(30)
+# Telegram Bot Token Yahan Dalein ya Render Environment Variables me set karein
+BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 
-async def check_single_firebase_fast(session, firebase_url: str) -> dict:
-    clean_url = firebase_url.strip()
-    if not clean_url.startswith("http"):
-        clean_url = "https://" + clean_url
-    if not clean_url.endswith(".json"):
-        clean_url = clean_url.rstrip("/") + "/.json"
+async def check_single_firebase(session: aiohttp.ClientSession, url: str) -> str | None:
+    """
+    Async request se fast check karta hai.
+    0 device/connections wale link ko return karega, baki ko None.
+    """
+    clean_url = url.split("?")[0].rstrip("/")
+    request_url = clean_url if clean_url.endswith(".json") else clean_url + ".json"
+    
+    if not request_url.startswith("http://") and not request_url.startswith("https://"):
+        request_url = "https://" + request_url
 
-    # Strict 3 seconds timeout per link
-    timeout = aiohttp.ClientTimeout(total=3.0, connect=1.5)
+    try:
+        # Timeout 3 seconds rakha hai fast processing ke liye
+        async with session.get(request_url, timeout=aiohttp.ClientTimeout(total=3)) as response:
+            if response.status == 200:
+                data = await response.json()
+                # Data empty ho ya 0 length ho tabhi valid 0-device manega
+                if data is None or len(data) == 0:
+                    return clean_url
+            else:
+                # Agar endpoint response nahi de raha ya dead hai to use 0 device manke include karna hai
+                return clean_url
+    except Exception:
+        # Request failed or timeout means no active devices reachable
+        return clean_url
+    
+    return None
 
-    async with SEMAPHORE:
-        try:
-            async with session.get(clean_url, timeout=timeout) as response:
-                if response.status in [401, 403]:
-                    return {"status": "error", "msg": "🔒 Locked"}
-                elif response.status != 200:
-                    return {"status": "error", "msg": f"❌ HTTP {response.status}"}
-                
-                text_data = await response.text()
-                if not text_data or text_data == "null":
-                    return {"status": "error", "msg": "⚠️ Empty"}
-
-                try:
-                    data = json.loads(text_data)
-                except Exception:
-                    return {"status": "error", "msg": "❌ Invalid Data"}
-
-                online_count = 0
-                offline_count = 0
-                total_devices = 0
-
-                # Non-recursive fast iterative scanner
-                nodes = [data]
-                while nodes:
-                    curr = nodes.pop()
-                    if isinstance(curr, dict):
-                        has_status = False
-                        for k, v in curr.items():
-                            if k.lower() in ["status", "state", "presence", "isonline", "online"]:
-                                has_status = True
-                                val_str = str(v).lower()
-                                if val_str in ["online", "true", "1", "active"]:
-                                    online_count += 1
-                                else:
-                                    offline_count += 1
-                                break
-                        if has_status:
-                            total_devices += 1
-                        nodes.extend(curr.values())
-                    elif isinstance(curr, list):
-                        nodes.extend(curr)
-
-                if total_devices == 0:
-                    return {"status": "error", "msg": "⚠️ No Status Key"}
-
-                return {
-                    "status": "ok",
-                    "online": online_count,
-                    "offline": offline_count,
-                    "total": total_devices,
-                    "original_url": firebase_url
-                }
-
-        except asyncio.TimeoutError:
-            return {"status": "error", "msg": "⏱️ Timeout"}
-        except Exception:
-            return {"status": "error", "msg": "❌ Conn Error"}
+async def check_all_firebases(urls: list) -> list:
+    """
+    300+ URLs ko ek sath parallelly execute karta hai
+    """
+    connector = aiohttp.TCPConnector(limit=100) # Concurrent connections limit
+    async with aiohttp.ClientSession(connector=connector) as session:
+        tasks = [check_single_firebase(session, url) for url in urls]
+        results = await asyncio.gather(*tasks)
+        # None values ko filter karke hata do
+        return [res for res in results if res is not None]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "⚡ **Ultra-Fast Online Firebase Scanner**\n\n"
-        "Direct multiple Firebase links bhejien. Check karke bot aapko sirf wahi Firebase links dega jinme devices ONLINE hain!"
+        "⚡ Fast Firebase Checker active!\n\n"
+        "Bhai 300-500 kitne bhi Firebase links ek sath bhej do, "
+        "kuch hi seconds me filter ho jayenge."
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
+    # Expressive RegEx for all URLs containing firebaseio.com or custom endpoints
+    urls = re.findall(r'(https?://[^\s]+|[\w-]+\.firebaseio\.com[^\s]*)', text)
     
-    # Extract unique Firebase URLs
-    firebase_pattern = r'https://[a-zA-Z0-9\.-]+?\.(?:firebaseio\.com|firebasedatabase\.app)'
-    found_urls = re.findall(firebase_pattern, text)
-    unique_urls = list(dict.fromkeys(found_urls))
-
-    if not unique_urls:
-        await update.message.reply_text("❌ Koi valid Firebase URL nahi mila.")
+    if not urls:
+        await update.message.reply_text("Koyi valid Firebase link nahi mila.")
         return
 
-    status_msg = await update.message.reply_text(f"⚡ **{len(unique_urls)} Firebase links check ho rahe hain...**")
+    msg = await update.message.reply_text(f"🚀 {len(urls)} links fast check ho rahe hain...")
 
-    # High-Performance Async Connection Pool
-    connector = aiohttp.TCPConnector(limit=100, ttl_dns_cache=300)
-    async with aiohttp.ClientSession(connector=connector) as session:
-        tasks = [check_single_firebase_fast(session, url) for url in unique_urls]
-        results = await asyncio.gather(*tasks)
+    # Parallel async execution
+    zero_device_links = await check_all_firebases(urls)
 
-    report_lines = []
-    online_firebase_links = []
-    total_all_online = 0
-    total_all_offline = 0
-    total_all_devices = 0
-
-    for idx, (url, res) in enumerate(zip(unique_urls, results), 1):
-        domain_name = url.split("//")[1].split(".")[0]
+    if zero_device_links:
+        # 4096 character length limits handle karne ke liye chunks me bhejega
+        response_text = "\n".join(zero_device_links)
         
-        if res["status"] == "ok":
-            online = res["online"]
-            offline = res["offline"]
-            total = res["total"]
-            
-            total_all_online += online
-            total_all_offline += offline
-            total_all_devices += total
-            
-            report_lines.append(f"**{idx}. {domain_name}** ➔ 🟢 {online} | 🔴 {offline} | 📱 {total}")
-            
-            # Agar online devices > 0 hain, toh is link ko save kar lo
-            if online > 0:
-                online_firebase_links.append(url)
+        if len(response_text) > 4000:
+            for i in range(0, len(zero_device_links), 80):
+                chunk = "\n".join(zero_device_links[i:i+80])
+                await update.message.reply_text(chunk)
         else:
-            report_lines.append(f"**{idx}. {domain_name}** ➔ {res['msg']}")
-
-    # Final Combined Output
-    final_report = f"📊 **Multi-Firebase Speed Scan Report**\n\n"
-    
-    formatted_body = "\n".join(report_lines)
-    if len(formatted_body) > 2000:
-        formatted_body = formatted_body[:2000] + "\n\n...[Truncated due to size limit]"
-
-    final_report += formatted_body
-    final_report += (
-        f"\n\n-------------------------\n"
-        f"🌐 **Overall Totals ({len(unique_urls)} Databases):**\n"
-        f"🟢 Total Online: **{total_all_online}**\n"
-        f"🔴 Total Offline: **{total_all_offline}**\n"
-        f"📱 Total Devices: **{total_all_devices}**"
-    )
-
-    # Adding Active/Online Firebase Links Section
-    if online_firebase_links:
-        final_report += f"\n\n✅ **ACTIVE ONLINE FIREBASE LINKS ({len(online_firebase_links)}):**\n"
-        final_report += "\n".join([f"`{link}`" for link in online_firebase_links])
+            await update.message.reply_text(response_text)
     else:
-        final_report += "\n\n⚠️ **Kisi bhi Firebase me Online Device nahi mila.**"
-
-    await status_msg.edit_text(final_report, parse_mode="Markdown", disable_web_page_preview=True)
+        await update.message.reply_text("Koyi bhi 0-device wala Firebase link nahi mila.")
 
 def main():
-    token = os.environ.get("BOT_TOKEN")
-    if not token:
-        print("Error: BOT_TOKEN Environment Variable nahi mila!")
-        return
-
+    # Flask ko alag thread me run karein taaki Render ka Web Service port bind ho jaye
     Thread(target=run_flask, daemon=True).start()
 
-    application = Application.builder().token(token).build()
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    
-    print("Ultra-Fast Bot is running...")
-    application.run_polling()
+    # Telegram Bot App
+    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+
+    print("Server and Bot running...")
+    app.run_polling()
 
 if __name__ == '__main__':
     main()
