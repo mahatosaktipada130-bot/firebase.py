@@ -24,7 +24,8 @@ BOT_TOKEN = os.environ.get("BOT_TOKEN", "YOUR_TELEGRAM_BOT_TOKEN")
 async def check_single_firebase(session: aiohttp.ClientSession, url: str) -> str | None:
     """
     Async request se fast check karta hai.
-    0 device/connections wale link ko return karega, baki ko None.
+    Sirf 1+ active devices/data wale link ko return karega.
+    0 device / dead links ko None karke HATA DEGA.
     """
     clean_url = url.split("?")[0].rstrip("/")
     request_url = clean_url if clean_url.endswith(".json") else clean_url + ".json"
@@ -37,16 +38,18 @@ async def check_single_firebase(session: aiohttp.ClientSession, url: str) -> str
         async with session.get(request_url, timeout=aiohttp.ClientTimeout(total=3)) as response:
             if response.status == 200:
                 data = await response.json()
-                # Data empty ho ya 0 length ho tabhi valid 0-device manega
-                if data is None or len(data) == 0:
-                    return clean_url
-            else:
-                # Agar endpoint response nahi de raha ya dead hai to use 0 device manke include karna hai
-                return clean_url
+                
+                # Agar data active/present hai (devices > 0)
+                if data is not None:
+                    if isinstance(data, (dict, list)) and len(data) > 0:
+                        return clean_url
+                    elif not isinstance(data, (dict, list)): # Single value/primitive data
+                        return clean_url
     except Exception:
-        # Request failed or timeout means no active devices reachable
-        return clean_url
+        # Request error / timeout / unreachable ko 0 device maan kar ignore karenge
+        pass
     
+    # 0 device ya invalid link ko None return karke hata do
     return None
 
 async def check_all_firebases(urls: list) -> list:
@@ -57,45 +60,44 @@ async def check_all_firebases(urls: list) -> list:
     async with aiohttp.ClientSession(connector=connector) as session:
         tasks = [check_single_firebase(session, url) for url in urls]
         results = await asyncio.gather(*tasks)
-        # None values ko filter karke hata do
+        # None (0 devices) wale items ko filter karke hata do
         return [res for res in results if res is not None]
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
-        "⚡ Fast Firebase Checker active!\n\n"
-        "Bhai 300-500 kitne bhi Firebase links ek sath bhej do, "
-        "kuch hi seconds me filter ho jayenge."
+        "⚡ Active Firebase Checker Ready!\n\n"
+        "Bhai Firebase links bhej do. Main 0 device wale saare links hata dunga "
+        "aur sirf active (1+ device) wale links bhejunga."
     )
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text
-    # Expressive RegEx for all URLs containing firebaseio.com or custom endpoints
+    # RegEx for all Firebase URLs
     urls = re.findall(r'(https?://[^\s]+|[\w-]+\.firebaseio\.com[^\s]*)', text)
     
     if not urls:
         await update.message.reply_text("Koyi valid Firebase link nahi mila.")
         return
 
-    msg = await update.message.reply_text(f"🚀 {len(urls)} links fast check ho rahe hain...")
+    msg = await update.message.reply_text(f"🚀 {len(urls)} links check ho rahe hain (0 device wale filter ho rahe hain)...")
 
     # Parallel async execution
-    zero_device_links = await check_all_firebases(urls)
+    active_device_links = await check_all_firebases(urls)
 
-    if zero_device_links:
+    if active_device_links:
         # 4096 character length limits handle karne ke liye chunks me bhejega
-        response_text = "\n".join(zero_device_links)
-        
-        if len(response_text) > 4000:
-            for i in range(0, len(zero_device_links), 80):
-                chunk = "\n".join(zero_device_links[i:i+80])
+        if len("\n".join(active_device_links)) > 4000:
+            for i in range(0, len(active_device_links), 80):
+                chunk = "\n".join(active_device_links[i:i+80])
                 await update.message.reply_text(chunk)
         else:
+            response_text = "\n".join(active_device_links)
             await update.message.reply_text(response_text)
     else:
-        await update.message.reply_text("Koyi bhi 0-device wala Firebase link nahi mila.")
+        await update.message.reply_text("Ek bhi active device wala Firebase link nahi mila (Sabhi 0 device/dead the).")
 
 def main():
-    # Flask ko alag thread me run karein taaki Render ka Web Service port bind ho jaye
+    # Flask ko alag thread me run karein Render port binding ke liye
     Thread(target=run_flask, daemon=True).start()
 
     # Telegram Bot App
@@ -108,3 +110,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
