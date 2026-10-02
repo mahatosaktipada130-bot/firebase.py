@@ -1,3 +1,4 @@
+from flask import Flask
 # ====================================================
 #          ƬʜᴇΉΛᑕKΣЯ♛  •  PRIME HOSTING v5.2
 # ====================================================
@@ -13,29 +14,16 @@ import threading
 import re
 import signal
 import html as html_mod
-import json
-import urllib.request
-import urllib.error
-import urllib.parse
-import tempfile
 from datetime import datetime, timedelta
 from telebot import TeleBot, types
 
 # ==================== RAILWAY / ENV CONFIG ====================
 BOT_TOKEN = os.environ.get("BOT_TOKEN", "").strip()
 ADMIN_ID = int(os.environ.get("ADMIN_ID", 5427735251))
-OWNER_NAME = "ƬʜᴇΉΛᑕKΣЯ♛"
+OWNER_NAME = "👑  Rᴜsʜᴇʀ Kɪɴɢ  👑"
 
 HOST_DIR = "hosted_files"
 MAX_LOG_SIZE_MB = 5
-
-# ==================== SUPABASE PERSISTENT STORAGE ====================
-# URL can safely have a default; NEVER hard-code the secret key.
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "https://pwqgqfvqaegyomxyamnv.supabase.co").rstrip("/")
-SUPABASE_SECRET_KEY = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
-SUPABASE_BUCKET = os.environ.get("SUPABASE_BUCKET", "rusher-hosting").strip()
-SUPABASE_BACKUP_PREFIX = "rusher_data"
-SUPABASE_BACKUP_INTERVAL = int(os.environ.get("SUPABASE_BACKUP_INTERVAL", "60"))
 
 # Default live custom-emoji IDs (Premium animated)
 DEFAULT_EMOJI = {
@@ -70,148 +58,13 @@ config = {
     "admin_username": "",
     "channel_username": "",
     "force_channel": "",
-    "brand_name": "PRIME HOSTING SERVER",
-    "free_limit": 2,
+    "brand_name": "👑  Rᴜsʜᴇʀ Kɪɴɢ  👑",
+    "free_limit": 5,
     "prime_limit": 5,
 }
 EMOJI_IDS = dict(DEFAULT_EMOJI)
 
-
-def _sb_headers(content_type=None):
-    if not SUPABASE_SECRET_KEY:
-        return None
-    h = {
-        "apikey": SUPABASE_SECRET_KEY,
-        "Authorization": f"Bearer {SUPABASE_SECRET_KEY}",
-    }
-    if content_type:
-        h["Content-Type"] = content_type
-    return h
-
-def _sb_request(method, path, data=None, content_type=None, timeout=60):
-    headers = _sb_headers(content_type)
-    if not headers:
-        return None
-    req = urllib.request.Request(SUPABASE_URL + path, data=data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
-            return r.status, r.read()
-    except urllib.error.HTTPError as e:
-        return e.code, e.read()
-    except Exception as e:
-        print(f"[Supabase] request error: {e}")
-        return None
-
-def supabase_upload(local_path, remote_path):
-    if not SUPABASE_SECRET_KEY or not os.path.isfile(local_path):
-        return False
-    with open(local_path, "rb") as f:
-        data = f.read()
-    result = _sb_request("POST", f"/storage/v1/object/{SUPABASE_BUCKET}/{urllib.parse.quote(remote_path, safe='/')}", data, "application/octet-stream")
-    if result and result[0] in (200, 201):
-        return True
-    # Existing object: replace it.
-    result = _sb_request("PUT", f"/storage/v1/object/{SUPABASE_BUCKET}/{urllib.parse.quote(remote_path, safe='/')}", data, "application/octet-stream")
-    return bool(result and result[0] in (200, 201))
-
-def supabase_download(remote_path, local_path):
-    if not SUPABASE_SECRET_KEY:
-        return False
-    headers = _sb_headers()
-    req = urllib.request.Request(
-        SUPABASE_URL + f"/storage/v1/object/{SUPABASE_BUCKET}/{urllib.parse.quote(remote_path, safe='/')}",
-        headers=headers, method="GET"
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=60) as r:
-            data = r.read()
-        os.makedirs(os.path.dirname(local_path) or ".", exist_ok=True)
-        with open(local_path, "wb") as f:
-            f.write(data)
-        return True
-    except Exception:
-        return False
-
-def supabase_list(prefix):
-    if not SUPABASE_SECRET_KEY:
-        return []
-    body = json.dumps({"prefix": prefix, "limit": 1000, "offset": 0, "sortBy": {"column": "name", "order": "asc"}}).encode()
-    result = _sb_request("POST", f"/storage/v1/object/list/{SUPABASE_BUCKET}", body, "application/json")
-    if not result or result[0] != 200:
-        return []
-    try:
-        return json.loads(result[1].decode())
-    except Exception:
-        return []
-
-def restore_from_supabase():
-    if not SUPABASE_SECRET_KEY:
-        print("ℹ️ Supabase restore skipped: SUPABASE_SECRET_KEY is not set.")
-        return
-    try:
-        # Restore the SQLite database before init_db() creates a new one.
-        if supabase_download(f"{SUPABASE_BACKUP_PREFIX}/hosting_data.db", "hosting_data.db"):
-            print("☁️ Restored hosting_data.db from Supabase.")
-        else:
-            print("ℹ️ No Supabase database backup found; starting with local DB.")
-
-        os.makedirs(HOST_DIR, exist_ok=True)
-        for item in supabase_list(f"{SUPABASE_BACKUP_PREFIX}/{HOST_DIR}/"):
-            name = item.get("name") if isinstance(item, dict) else None
-            if not name or name.endswith("/"):
-                continue
-            remote = f"{SUPABASE_BACKUP_PREFIX}/{HOST_DIR}/{name}"
-            local = os.path.join(HOST_DIR, name)
-            supabase_download(remote, local)
-        print("☁️ Supabase hosted files restore complete.")
-    except Exception as e:
-        print(f"⚠️ Supabase restore failed: {e}")
-
-def backup_to_supabase():
-    if not SUPABASE_SECRET_KEY:
-        return
-    try:
-        # Consistent SQLite snapshot via the SQLite backup API.
-        if os.path.exists("hosting_data.db"):
-            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-                tmp_path = tmp.name
-            src = sqlite3.connect("hosting_data.db", check_same_thread=False)
-            dst = sqlite3.connect(tmp_path)
-            try:
-                src.backup(dst)
-            finally:
-                dst.close(); src.close()
-            try:
-                supabase_upload(tmp_path, f"{SUPABASE_BACKUP_PREFIX}/hosting_data.db")
-            finally:
-                try: os.remove(tmp_path)
-                except OSError: pass
-
-        for root, _, files in os.walk(HOST_DIR):
-            for name in files:
-                local = os.path.join(root, name)
-                rel = os.path.relpath(local, HOST_DIR).replace(os.sep, "/")
-                supabase_upload(local, f"{SUPABASE_BACKUP_PREFIX}/{HOST_DIR}/{rel}")
-        print("☁️ Supabase backup completed.")
-    except Exception as e:
-        print(f"⚠️ Supabase backup failed: {e}")
-
-def start_supabase_backup_worker():
-    if not SUPABASE_SECRET_KEY:
-        print("⚠️ Supabase backup disabled: add SUPABASE_SECRET_KEY in Render Environment.")
-        return
-    def worker():
-        while True:
-            try:
-                backup_to_supabase()
-            except Exception as e:
-                print(f"⚠️ Backup worker error: {e}")
-            time.sleep(max(30, SUPABASE_BACKUP_INTERVAL))
-    threading.Thread(target=worker, daemon=True, name="supabase-backup").start()
-
-# Restore persisted data before database initialization.
 os.makedirs(HOST_DIR, exist_ok=True)
-restore_from_supabase()
 
 bot = TeleBot(BOT_TOKEN, threaded=True, num_threads=50)
 
@@ -283,8 +136,8 @@ def init_db():
         "admin_username": "",
         "channel_username": "",
         "force_channel": "",
-        "brand_name": "PRIME HOSTING SERVER",
-        "free_limit": "2",
+        "brand_name": "👑  Rᴜsʜᴇʀ Kɪɴɢ  👑",
+        "free_limit": "5",
         "prime_limit": "5",
     }
     for k, v in default_config.items():
@@ -324,7 +177,6 @@ def load_config():
     EMOJI_IDS = emoji_map
 
 load_config()
-start_supabase_backup_worker()
 
 
 def ce(emoji_id: str, fallback: str) -> str:
@@ -341,7 +193,7 @@ def pe(key: str, fallback: str) -> str:
 
 
 def brand() -> str:
-    return config.get("brand_name") or "PRIME HOSTING SERVER"
+    return config.get("brand_name") or "👑  Rᴜsʜᴇʀ Kɪɴɢ  👑"
 
 
 def set_config_value(key: str, value: str):
@@ -455,27 +307,9 @@ def force_join_keyboard():
     return markup
 
 def is_prime_user(user_id):
-    if user_id == ADMIN_ID:
-        return True
-    conn = get_db()
-    cursor = conn.cursor()
-    cursor.execute("SELECT is_prime, prime_expire FROM users WHERE user_id = ?", (user_id,))
-    row = cursor.fetchone()
-    if row and row['is_prime'] == 1:
-        if row['prime_expire']:
-            try:
-                expire_date = datetime.strptime(row['prime_expire'], "%Y-%m-%d %H:%M:%S")
-                if datetime.now() > expire_date:
-                    cursor.execute("UPDATE users SET is_prime = 0, prime_expire = NULL WHERE user_id = ?", (user_id,))
-                    conn.commit()
-                    conn.close()
-                    return False
-            except Exception:
-                pass
-        conn.close()
-        return True
-    conn.close()
-    return False
+    # All users get the full feature set for free. Kept as a compatibility
+    # helper because older handlers still call this function.
+    return True
 
 def add_prime_days(user_id, days):
     conn = get_db()
@@ -778,20 +612,21 @@ def kbtn(text, style=None, icon=None):
 
 # ==================== KEYBOARDS ====================
 def main_reply_keyboard(user_id):
-    """Bottom persistent menu — blue / red styled rows."""
+    """Persistent Telegram reply keyboard. Colors alternate: blue/red/green.
+    No two adjacent buttons use the same style.
+    """
     markup = types.ReplyKeyboardMarkup(resize_keyboard=True, is_persistent=True, row_width=2)
     markup.row(
         kbtn("Upload Bot", style="primary", icon="rocket"),
-        kbtn("My Bots", style="primary", icon="bot"),
-    )
-    markup.row(kbtn("PRIME ZONE", style="danger", icon="diamond"))
-    markup.row(
-        kbtn("Referral", style="primary", icon="people"),
-        kbtn("Redeem Code", style="danger", icon="gift"),
+        kbtn("My Bots", style="danger", icon="bot"),
     )
     markup.row(
-        kbtn("Status", style="primary", icon="refresh"),
+        kbtn("Status", style="success", icon="refresh"),
         kbtn("Help", style="primary", icon="bell"),
+    )
+    markup.row(
+        kbtn("Referral", style="danger", icon="people"),
+        kbtn("Free Features", style="success", icon="diamond"),
     )
     ch = config.get("channel_username", "").strip()
     ad = config.get("admin_username", "").strip()
@@ -803,7 +638,7 @@ def main_reply_keyboard(user_id):
     if extra:
         markup.row(*extra)
     if user_id == ADMIN_ID:
-        markup.row(kbtn("Admin Panel", style="danger", icon="settings"))
+        markup.row(kbtn("Admin Panel", style="success", icon="settings"))
     return markup
 
 
@@ -915,7 +750,7 @@ def admin_panel_keyboard():
     )
     markup.add(
         ibtn("Live Emojis", callback_data="admin_emojis", style="danger", icon="spark"),
-        ibtn("Force Join Channel", callback_data="admin_set_force", style="danger", icon="lock"),
+        ibtn("Free Access", callback_data="free_access_info", style="success", icon="check"),
     )
     markup.add(
         ibtn("Channel Username", callback_data="admin_set_channel", style="primary", icon="link"),
@@ -977,38 +812,13 @@ def start_cmd(message):
 
     send_typing(message.chat.id)
 
-    # Force channel for referral / access
-    force_ch = (config.get("force_channel") or "").strip().lstrip("@")
-    if force_ch and not check_user_in_force_channel(user_id):
-        bot.send_message(
-            message.chat.id,
-            f'{pe("lock", "🔒")} <b>Join Required</b>\n'
-            f'━━━━━━━━━━━━━━━━━━━━\n'
-            f'{pe("link", "📢")} Pehle channel join karo, phir <b>Verify</b> dabao.\n'
-            f'Referral tabhi count hoga jab verify successful ho.',
-            parse_mode="HTML",
-            reply_markup=force_join_keyboard(),
-        )
-        return
+    # Free access: no mandatory channel join / verification.
 
-    # Already in channel — credit pending referral if any
-    if force_ch:
-        credit_referral(user_id)
-    else:
-        # No force channel — credit pending immediately
-        conn = get_db()
-        cursor = conn.cursor()
-        cursor.execute("SELECT ref_pending, referred_by FROM users WHERE user_id = ?", (user_id,))
-        row = cursor.fetchone()
-        conn.close()
-        if row and row["ref_pending"] and not row["referred_by"]:
-            credit_referral(user_id)
-
-    badge_html = f'{pe("crown", "👑")} <b>PRIME VIP</b>' if is_prime else f'{pe("lock", "🔒")} <b>FREE</b>'
-    guard_html = f'{pe("check", "✅")} 24/7 Active' if is_prime else f'{pe("lock", "🔒")} Prime Only'
+    badge_html = f'{pe("check", "✅")} <b>FREE</b>'
+    guard_html = f'{pe("check", "✅")} 24/7 Active'
     welcome = (
         f'{pe("spark", "✨")} <b>{brand()}</b> {pe("spark", "✨")}\n'
-        f'{pe("crown", "👑")} <b>{OWNER_NAME}</b> • v5.2\n'
+        f'{pe("crown", "👑")} <b>{OWNER_NAME}</b> • FREE v5.2\n'
         f'━━━━━━━━━━━━━━━━━━━━\n\n'
         f'{pe("wave", "👋")} Welcome, <b>{user_name}</b>!\n\n'
         f'{pe("card", "🪪")} <b>Profile</b>\n'
@@ -1054,7 +864,7 @@ def handle_document(message):
 
     if not existing_approved and current_count >= max_allowed:
         conn.close()
-        bot.reply_to(message, f"⚠️ Limit reached! Max `{max_allowed}` bots. Upgrade to Prime for more.", parse_mode="Markdown")
+        bot.reply_to(message, f"⚠️ Limit reached! Max `{max_allowed}` hosted bots.", parse_mode="Markdown")
         return
 
     # Also check pending for same filename
@@ -1284,21 +1094,18 @@ def bottom_menu_handler(message):
         )
     elif text == "My Bots":
         _show_my_bots(chat_id, user_id)
-    elif text == "PRIME ZONE":
-        status = f'{pe("crown", "👑")} <b>PRIME VIP</b>' if is_prime_user(user_id) else f'{pe("lock", "🔒")} <b>FREE</b>'
+    elif text == "Free Features":
         msg = (
-            f'{pe("diamond", "💎")} <b>PRIME ZONE</b>\n'
+            f'{pe("diamond", "💎")} <b>FREE FEATURES</b>\n'
             f'{pe("crown", "👑")} <b>{OWNER_NAME}</b>\n'
             f'━━━━━━━━━━━━━━━━━━━━\n'
-            f'Status: {status}\n\n'
-            f'{pe("fire", "🔥")} <b>Prime Benefits</b>\n'
-            f'├ Host up to <code>{config["prime_limit"]}</code> bots\n'
-            f'├ Priority execution\n'
-            f'├ Auto Crash Guard\n'
-            f'└ Priority support\n\n'
-            f'{pe("gift", "🎟️")} Redeem codes or gift Prime from here.'
+            f'{pe("check", "✅")} Full hosting access: <b>FREE</b>\n'
+            f'{pe("bot", "📦")} Host up to <code>{config["free_limit"]}</code> bots\n'
+            f'{pe("rocket", "⚡")} Auto Crash Guard: <b>ON</b>\n'
+            f'{pe("check", "🟢")} No subscription required\n'
+            f'{pe("check", "🟢")} No mandatory channel join'
         )
-        bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=prime_zone_keyboard())
+        bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=main_reply_keyboard(user_id))
     elif text == "Referral":
         conn = get_db()
         cursor = conn.cursor()
@@ -1308,19 +1115,13 @@ def bottom_menu_handler(message):
         conn.close()
         bot_user = get_bot_username()
         ref_link = f"https://t.me/{bot_user}?start=ref_{user_id}"
-        fch = (config.get("force_channel") or "").strip().lstrip("@")
-        join_note = (
-            f'\n{pe("lock", "🔒")} Friend must join @{fch} + Verify for count.'
-            if fch else ""
-        )
         msg = (
             f'{pe("people", "👥")} <b>Referral Program</b>\n'
             f'━━━━━━━━━━━━━━━━━━━━\n'
-            f'{pe("gift", "🎁")} Invite friends → Get FREE Prime!\n\n'
+            f'{pe("gift", "🎁")} Invite friends and share the bot.\n\n'
             f'{pe("link", "🔗")} Your link:\n<code>{ref_link}</code>\n\n'
             f'{pe("star", "📊")} Referrals: <code>{ref_count}</code>\n'
-            f'{pe("crown", "👑")} Reward: <b>1 day Prime</b> every 3 invites'
-            f'{join_note}'
+            f'{pe("check", "✅")} Hosting access is already <b>FREE</b>.'
         )
         bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=main_reply_keyboard(user_id))
     elif text == "Redeem Code":
@@ -1379,8 +1180,7 @@ def bottom_menu_handler(message):
             f'{pe("settings", "⚙️")} <b>ADMIN PANEL</b>\n'
             f'━━━━━━━━━━━━━━━━━━━━\n'
             f'{pe("star", "🏷")} Brand: <b>{brand()}</b>\n'
-            f'{pe("bot", "📦")} Free Limit: <code>{config["free_limit"]}</code>\n'
-            f'{pe("crown", "👑")} Prime Limit: <code>{config["prime_limit"]}</code>\n'
+            f'{pe("bot", "📦")} Free Limit: <code>{config["free_limit"]}</code> bots\n'
             f'{pe("link", "📢")} Channel: @{config.get("channel_username") or "-"}\n'
             f'{pe("user", "📞")} Admin: @{config.get("admin_username") or "-"}\n'
             f'{pe("bot", "🤖")} Bot: @{config.get("bot_username") or "-"}\n\n'
@@ -1502,6 +1302,15 @@ def callback_handler(call):
             reply_markup=main_reply_keyboard(user_id),
         )
 
+    elif data == "free_access_info":
+        msg = (
+            f'{pe("check", "🟢")} <b>FREE ACCESS</b>\n'
+            f'━━━━━━━━━━━━━━━━━━━━\n'
+            f'All users get the full hosting feature set.\n'
+            f'No subscription and no mandatory channel join.'
+        )
+        send_or_edit(chat_id, msg, main_reply_keyboard(user_id), msg_id)
+
     elif data == "prime_zone":
         status = "👑 PRIME VIP" if is_prime_user(user_id) else "🆓 FREE"
         msg = (
@@ -1621,8 +1430,7 @@ def callback_handler(call):
             f'{pe("settings", "⚙️")} <b>ADMIN PANEL</b>\n'
             f'━━━━━━━━━━━━━━━━━━━━\n'
             f'{pe("star", "🏷")} Brand: <b>{brand()}</b>\n'
-            f'{pe("bot", "📦")} Free Limit: <code>{config["free_limit"]}</code>\n'
-            f'{pe("crown", "👑")} Prime Limit: <code>{config["prime_limit"]}</code>\n'
+            f'{pe("bot", "📦")} Free Limit: <code>{config["free_limit"]}</code> bots\n'
             f'{pe("link", "📢")} Channel: @{config.get("channel_username") or "-"}\n'
             f'{pe("user", "📞")} Admin: @{config.get("admin_username") or "-"}\n'
             f'{pe("bot", "🤖")} Bot: @{config.get("bot_username") or "-"}\n\n'
@@ -1915,9 +1723,10 @@ def process_admin_set_limits(message):
             raise ValueError
         free = int(parts[0].strip())
         prime = int(parts[1].strip())
-        set_config_value("free_limit", str(free))
+        # One free limit for everyone; ignore the old Prime tier value.
+        set_config_value("free_limit", str(prime))
         set_config_value("prime_limit", str(prime))
-        bot.reply_to(message, f'{pe("check", "✅")} Limits updated\nFree: <code>{free}</code> | Prime: <code>{prime}</code>', parse_mode="HTML")
+        bot.reply_to(message, f'{pe("check", "✅")} Free limit updated: <code>{prime}</code> bots', parse_mode="HTML")
     except Exception:
         bot.reply_to(message, "❌ Invalid format. Use: <code>3, 10</code>", parse_mode="HTML")
 
@@ -1986,16 +1795,8 @@ def process_admin_set_emoji(message, key):
 def process_admin_set_force(message):
     if message.from_user.id != ADMIN_ID:
         return
-    val = (message.text or "").strip().lstrip("@")
-    if val.lower() == "none":
-        val = ""
-    set_config_value("force_channel", val)
-    bot.reply_to(
-        message,
-        f'{pe("check", "✅")} Force-join channel: <code>{val or "disabled"}</code>\n'
-        f'Bot ko us channel me admin banao taaki verify kaam kare.',
-        parse_mode="HTML",
-    )
+    set_config_value("force_channel", "")
+    bot.reply_to(message, f'{pe("check", "✅")} Must-join channel is permanently disabled.', parse_mode="HTML")
 
 
 def process_admin_set_channel(message):
@@ -2395,12 +2196,29 @@ def gen_key_cmd(message):
     conn.close()
     bot.reply_to(message, f"🎟️ *Prime Code*\n`{code}` ({days} days)", parse_mode="Markdown")
 
+# ==================== FLASK / RENDER HEALTH SERVER ====================
+app = Flask(__name__)
+
+@app.get("/")
+def home():
+    return "Rᴜsʜᴇʀ Kɪɴɢ 👑 is running!", 200
+
+@app.get("/health")
+def health():
+    return {"status": "ok", "bot": "Rᴜsʜᴇʀ Kɪɴɢ 👑"}, 200
+
+def run_web_server():
+    import os
+    port = int(os.environ.get("PORT", "10000"))
+    app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False)
+
 # ==================== START ====================
 if __name__ == '__main__':
+    threading.Thread(target=run_web_server, daemon=True).start()
     print(f"👑 {OWNER_NAME}")
     print(f"⚡ {brand()} v5.2 (Admin Approval)")
     print(f"✅ Admin ID: {ADMIN_ID}")
-    print(f"✅ Free Limit: {config['free_limit']} | Prime Limit: {config['prime_limit']}")
+    print(f"✅ FREE hosting enabled | Limit: {config['free_limit']} bots | Must-join: OFF")
     try:
         uname = get_bot_username()
         print(f"✅ Bot Username: @{uname}")
