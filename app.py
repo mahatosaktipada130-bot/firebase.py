@@ -283,7 +283,7 @@ def credit_referral(user_id):
         try:
             bot.send_message(
                 ref_by,
-                f'{pe("gift", "🎉")} <b>Referral Bonus!</b> +1 day FREE Prime VIP.',
+                f'{pe("gift", "🎉")} <b>Referral system disabled.</b> +1 day FREE Prime VIP.',
                 parse_mode="HTML",
             )
         except Exception:
@@ -291,7 +291,7 @@ def credit_referral(user_id):
     try:
         bot.send_message(
             ref_by,
-            f'{pe("people", "👥")} New referral verified! Total may have increased.',
+            f'{pe("people", "👥")} Referral system disabled.',
             parse_mode="HTML",
         )
     except Exception:
@@ -826,7 +826,7 @@ def start_cmd(message):
         f'├ {pe("card", "🆔")} ID: <code>{user_id}</code>\n'
         f'└ {pe("diamond", "💎")} Status: {badge_html}\n\n'
         f'{pe("rocket", "⚡")} <b>Hosting</b>\n'
-        f'├ {pe("bot", "📦")} Limit: <code>{limit}</code> bots\n'
+        f'├ {pe("bot", "📦")} Limit: <b>Unlimited</b> bots\n'
         f'└ {pe("lock", "🛡")} Crash Guard: {guard_html}\n\n'
         f'━━━━━━━━━━━━━━━━━━━━\n'
         f'{pe("top", "👇")} Use buttons below:'
@@ -848,8 +848,8 @@ def handle_document(message):
         bot.reply_to(message, "❌ Only `.py` Python files are allowed.")
         return
 
-    is_prime = is_prime_user(user_id)
-    max_allowed = config['prime_limit'] if is_prime else config['free_limit']
+    # Free mode: hosting limit is unlimited for every user.
+    max_allowed = None
     filename = message.document.file_name
 
     conn = get_db()
@@ -861,11 +861,6 @@ def handle_document(message):
 
     cursor.execute("SELECT id FROM hosted_bots WHERE user_id = ? AND filename = ? AND status != 'pending'", (user_id, filename))
     existing_approved = cursor.fetchone()
-
-    if not existing_approved and current_count >= max_allowed:
-        conn.close()
-        bot.reply_to(message, f"⚠️ Limit reached! Max `{max_allowed}` hosted bots.", parse_mode="Markdown")
-        return
 
     # Also check pending for same filename
     cursor.execute("SELECT id FROM hosted_bots WHERE user_id = ? AND filename = ? AND status = 'pending'", (user_id, filename))
@@ -1100,13 +1095,13 @@ def bottom_menu_handler(message):
             f'{pe("crown", "👑")} <b>{OWNER_NAME}</b>\n'
             f'━━━━━━━━━━━━━━━━━━━━\n'
             f'{pe("check", "✅")} Full hosting access: <b>FREE</b>\n'
-            f'{pe("bot", "📦")} Host up to <code>{config["free_limit"]}</code> bots\n'
+            f'{pe("bot", "📦")} Host unlimited bots\n'
             f'{pe("rocket", "⚡")} Auto Crash Guard: <b>ON</b>\n'
             f'{pe("check", "🟢")} No subscription required\n'
             f'{pe("check", "🟢")} No mandatory channel join'
         )
         bot.send_message(chat_id, msg, parse_mode="HTML", reply_markup=main_reply_keyboard(user_id))
-    elif text == "Referral":
+    elif False and text == "Referral":
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute("SELECT referral_count FROM users WHERE user_id = ?", (user_id,))
@@ -1180,7 +1175,7 @@ def bottom_menu_handler(message):
             f'{pe("settings", "⚙️")} <b>ADMIN PANEL</b>\n'
             f'━━━━━━━━━━━━━━━━━━━━\n'
             f'{pe("star", "🏷")} Brand: <b>{brand()}</b>\n'
-            f'{pe("bot", "📦")} Free Limit: <code>{config["free_limit"]}</code> bots\n'
+            f'{pe("bot", "📦")} Free Limit: <b>Unlimited</b>\n'
             f'{pe("link", "📢")} Channel: @{config.get("channel_username") or "-"}\n'
             f'{pe("user", "📞")} Admin: @{config.get("admin_username") or "-"}\n'
             f'{pe("bot", "🤖")} Bot: @{config.get("bot_username") or "-"}\n\n'
@@ -1319,7 +1314,7 @@ def callback_handler(call):
             f"━━━━━━━━━━━━━━━━━━━━\n"
             f"Status: *{status}*\n\n"
             f"🔥 *Prime Benefits*\n"
-            f"├ 🚀 Host up to `{config['prime_limit']}` bots\n"
+            f"├ 🚀 Host unlimited bots\n"
             f"├ ⚡ Priority execution\n"
             f"├ 🛡 Auto Crash Guard\n"
             f"└ 🎧 Priority support\n\n"
@@ -1360,7 +1355,7 @@ def callback_handler(call):
             markup, msg_id
         )
 
-    elif data == "referral_info":
+    elif False and data == "referral_info":
         conn = get_db()
         cursor = conn.cursor()
         cursor.execute("SELECT referral_count FROM users WHERE user_id = ?", (user_id,))
@@ -1372,7 +1367,7 @@ def callback_handler(call):
         msg = (
             f"👥 *Referral Program*\n"
             f"━━━━━━━━━━━━━━━━━━━━\n"
-            f"Invite friends → Get FREE Prime!\n\n"
+            f"Referral system disabled.\n\n"
             f"🔗 Your link:\n`{ref_link}`\n\n"
             f"📊 Referrals: `{ref_count}`\n"
             f"🎁 Reward: *1 day Prime* every 3 invites"
@@ -1430,7 +1425,7 @@ def callback_handler(call):
             f'{pe("settings", "⚙️")} <b>ADMIN PANEL</b>\n'
             f'━━━━━━━━━━━━━━━━━━━━\n'
             f'{pe("star", "🏷")} Brand: <b>{brand()}</b>\n'
-            f'{pe("bot", "📦")} Free Limit: <code>{config["free_limit"]}</code> bots\n'
+            f'{pe("bot", "📦")} Free Limit: <b>Unlimited</b>\n'
             f'{pe("link", "📢")} Channel: @{config.get("channel_username") or "-"}\n'
             f'{pe("user", "📞")} Admin: @{config.get("admin_username") or "-"}\n'
             f'{pe("bot", "🤖")} Bot: @{config.get("bot_username") or "-"}\n\n'
@@ -1717,18 +1712,11 @@ def show_pending_requests(chat_id, msg_id=None):
 def process_admin_set_limits(message):
     if message.from_user.id != ADMIN_ID:
         return
-    try:
-        parts = message.text.strip().split(",")
-        if len(parts) != 2:
-            raise ValueError
-        free = int(parts[0].strip())
-        prime = int(parts[1].strip())
-        # One free limit for everyone; ignore the old Prime tier value.
-        set_config_value("free_limit", str(prime))
-        set_config_value("prime_limit", str(prime))
-        bot.reply_to(message, f'{pe("check", "✅")} Free limit updated: <code>{prime}</code> bots', parse_mode="HTML")
-    except Exception:
-        bot.reply_to(message, "❌ Invalid format. Use: <code>3, 10</code>", parse_mode="HTML")
+    bot.reply_to(
+        message,
+        f'{pe("check", "✅")} Hosting limit is already <b>Unlimited</b> for all users.',
+        parse_mode="HTML",
+    )
 
 def process_admin_set_brand(message):
     if message.from_user.id != ADMIN_ID:
@@ -2218,7 +2206,7 @@ if __name__ == '__main__':
     print(f"👑 {OWNER_NAME}")
     print(f"⚡ {brand()} v5.2 (Admin Approval)")
     print(f"✅ Admin ID: {ADMIN_ID}")
-    print(f"✅ FREE hosting enabled | Limit: {config['free_limit']} bots | Must-join: OFF")
+    print("✅ FREE hosting enabled | Limit: Unlimited | Must-join: OFF")
     try:
         uname = get_bot_username()
         print(f"✅ Bot Username: @{uname}")
