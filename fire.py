@@ -8,9 +8,30 @@ import base64
 import json
 import tempfile
 import zipfile
+import threading
 from datetime import datetime
+from flask import Flask
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, filters
+
+# ═══════════════════════════════════════════════════════════════
+# FLASK KEEP-ALIVE SERVER (For Render / Koyeb Web Services)
+# ═══════════════════════════════════════════════════════════════
+flask_app = Flask(__name__)
+
+@flask_app.route('/')
+@flask_app.route('/health')
+def home():
+    return "⚡ Cyber Core Telegram Bot is Active & Running!", 200
+
+def run_flask():
+    port = int(os.environ.get("PORT", 8080))
+    flask_app.run(host="0.0.0.0", port=port)
+
+def keep_alive():
+    server_thread = threading.Thread(target=run_flask)
+    server_thread.daemon = True
+    server_thread.start()
 
 # ═══════════════════════════════════════════════════════════════
 # TELEGRAM BOT CONFIGURATION
@@ -19,25 +40,20 @@ TELEGRAM_TOKEN = "8430586261:AAEFV7l7yBWPVRLxRZa64VQVWzzCUT1GrK4"
 TG_GATEWAY = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}"
 
 ADMIN_IDS = []
-
 ADMIN_LOGS = []
 LOG_LOCK = asyncio.Lock()
 USERS_FILE = "bot_users.json"
 
 # Font conversion helper for Rusher style (Small Caps)
 def to_rusher_font(text):
-    normal = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    small_caps = "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘǫʀꜱᴛᴜᴠᴡ🇽🇾ᴢᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘǫʀꜱᴛᴜᴠᴡ🇽🇾ᴢ"
-    # Mapping table for lowercase & uppercase small caps
     trans_table = str.maketrans(
         "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
         "ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘǫʀꜱᴛᴜᴠᴡxʏᴢᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘǫʀꜱᴛᴜᴠᴡxʏᴢ"
     )
     return text.translate(trans_table)
 
-# Smart formatting function to apply Rusher font ONLY to normal text, leaving HTML tags and code blocks untouched
+# Smart formatting function to apply Rusher font ONLY to normal text
 def format_reply(text):
-    # Split text by HTML tags to avoid modifying tags or code contents
     parts = re.split(r'(</?[^>]+>)', text)
     formatted_parts = []
     in_code = False
@@ -435,7 +451,6 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     elif msg.document:
         doc = msg.document
-        file_name = doc.file_name or "unknown"
         status_msg = await msg.reply_text(format_reply("⚡ <b>Processing Uploaded File...</b>"), parse_mode="HTML")
         file_path = await download_telegram_file(doc.file_id)
         
@@ -500,10 +515,18 @@ async def handle_messages(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await status_msg.edit_text(format_reply("❌ Failed to download file."), parse_mode="HTML")
 
 def main():
+    # Start Flask Web Server in Background Thread
+    keep_alive()
+
+    # Create explicit event loop for main thread to prevent Python 3.14 threading errors
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(CommandHandler("export", handle_messages))
     app.add_handler(MessageHandler(filters.ALL & ~filters.COMMAND, handle_messages))
+    
     app.run_polling()
 
 if __name__ == "__main__":
