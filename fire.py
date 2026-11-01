@@ -3,6 +3,7 @@ import re
 import base64
 import json
 import time
+import asyncio
 import threading
 from urllib.parse import unquote
 
@@ -29,7 +30,6 @@ flask_app = Flask(__name__)
 
 BOT_STARTED_AT = time.time()
 
-# Firebase URLs (legacy + regional + default)
 FIREBASE_PATTERN = (
     r"https?://"
     r"(?:"
@@ -43,14 +43,8 @@ PARAM_PATTERN = re.compile(r"[?&]([a-zA-Z0-9_]+)=([^&#\s]+)")
 STD_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
 
 FIREBASE_PATHS = [
-    "clients.json",
-    "users.json",
-    "Users.json",
-    "devices.json",
-    "Devices.json",
-    "online.json",
-    "data.json",
-    ".json",
+    "clients.json", "users.json", "Users.json", "devices.json",
+    "Devices.json", "online.json", "data.json", ".json",
 ]
 
 COMMON_KEYS = [
@@ -74,7 +68,6 @@ SMALL_CAPS_MAP = {
 URL_REGEX = re.compile(r'https?://\S+')
 
 
-# ================= Flask routes =================
 @flask_app.route("/")
 def index():
     return {
@@ -94,7 +87,6 @@ def run_flask():
     flask_app.run(host="0.0.0.0", port=PORT, debug=False, use_reloader=False)
 
 
-# ================= Styling =================
 def small_caps(text: str) -> str:
     urls = []
 
@@ -126,7 +118,6 @@ async def send_styled(update: Update, context: ContextTypes.DEFAULT_TYPE, text: 
         return None
 
 
-# ================= Device parsing =================
 def is_online_value(val):
     if isinstance(val, bool):
         return val
@@ -182,7 +173,6 @@ def parse_devices(data):
     return online, total - online, total
 
 
-# ================= Decoders =================
 def _xor(data: bytes, key: bytes) -> bytes:
     if not key:
         return data
@@ -336,7 +326,6 @@ def extract_firebase_urls(text: str) -> list:
     return list(dict.fromkeys(u.rstrip("/") for u in found))
 
 
-# ================= Handlers =================
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await send_styled(
         update, context,
@@ -465,14 +454,23 @@ def main():
         print("❌ Error: BOT_TOKEN missing hai!")
         return
 
+    # 🔧 Pythøn 3.10+ (spɇc!@lly 3.12+ / 3.14) kɇ l!yɇ ɇvɇnt løøp f!x
+    # β!n@ runtime.txt kɇ, h@rdcødɇd løøp §ɇt k!y@
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
     threading.Thread(target=run_flask, daemon=True).start()
     print(f"🌐 Flask keepalive running on port {PORT}")
 
     app = ApplicationBuilder().token(BOT_TOKEN).build()
     app.add_handler(CommandHandler("start", start))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), check_firebase))
-    print("🤖 Bot is running on Railway...")
-    app.run_polling()
+    
+    print("🤖 Bot is running on hosting...")
+    # 🔧 løøp clø§ɇ n@ hønɇ dø
+    app.run_polling(close_loop=False, drop_pending_updates=True)
 
 
 if __name__ == "__main__":
